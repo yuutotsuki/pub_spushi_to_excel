@@ -5,5 +5,3 @@ pic/**
 **/*.gif
 **/*.pdf
 **/*.xlsx
-config.gs
-config.sample.gs

@@ -1,32 +1,20 @@
 /**
- * testシートのうち、L列（エクスポート）が空の行だけを
+ * 設定シートで指定した対象シートのうち、L列（エクスポート）が空の行だけを
  * L列を除外したExcelに出力し、成功後にL列へ「済」を書き戻す。
- *
- * 事前準備:
- * - `config.gs` に対象スプレッドシートIDなどの設定を入れる。
  */
 function exportUnexportedRowsToXlsx() {
   const config = {
-    sheetName: 'test',               // 対象シート名（既定値）
-    exportColumn: 12,                // L列（1始まり）
     exportMarker: '済',              // 出力後に書き戻す値
-    outputBaseName: 'test',          // 出力ファイル名のベース（既定値）
-    outputFolderId: '',              // 空なら元スプレッドシートと同じフォルダ
   };
 
-  if (typeof CONFIG === 'undefined') {
-    throw new Error('CONFIG is required. Copy config.sample.gs to config.gs and edit values.');
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const settings = getSettings_(ss);
+  if (settings.sheetName === SETTINGS_SHEET_NAME) {
+    throw new Error(`Target sheet name cannot be "${SETTINGS_SHEET_NAME}".`);
   }
 
-  const spreadsheetId = getRequiredConfig('SPREADSHEET_ID');
-  const sheetName = getConfigOrDefault('SHEET_NAME', config.sheetName);
-  const exportColumn = getConfigOrDefault('EXPORT_COLUMN', config.exportColumn);
-  const outputBaseName = getConfigOrDefault('OUTPUT_BASENAME', config.outputBaseName);
-  const outputFolderId = getConfigOrDefault('OUTPUT_FOLDER_ID', config.outputFolderId);
-  const ss = SpreadsheetApp.openById(spreadsheetId);
-
-  const sheet = ss.getSheetByName(sheetName);
-  if (!sheet) throw new Error(`Sheet "${sheetName}" not found.`);
+  const sheet = ss.getSheetByName(settings.sheetName);
+  if (!sheet) throw new Error(`Sheet "${settings.sheetName}" not found.`);
 
   const lastRow = sheet.getLastRow();
   const lastCol = sheet.getLastColumn();
@@ -37,7 +25,7 @@ function exportUnexportedRowsToXlsx() {
 
   const values = sheet.getRange(1, 1, lastRow, lastCol).getValues();
   const header = values[0];
-  const exportColIdx = Number(exportColumn) - 1;
+  const exportColIdx = Number(settings.exportColumn) - 1;
 
   const rowsToExport = [];
   const rowsToMark = [];
@@ -64,7 +52,7 @@ function exportUnexportedRowsToXlsx() {
   ];
 
   const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyyMMdd-HHmmss');
-  const baseName = outputBaseName || 'export';
+  const baseName = settings.outputBaseName || 'export';
   const fileName = `${baseName}_${timestamp}.xlsx`;
 
   let tempFileId = '';
@@ -80,9 +68,7 @@ function exportUnexportedRowsToXlsx() {
     // .xlsx としてエクスポート（Drive API v3 を直接叩いて alt=media を指定）。
     const exportBlob = fetchExportAsXlsx(tempFileId).setName(fileName);
 
-    const parentFolder = outputFolderId
-      ? DriveApp.getFolderById(outputFolderId)
-      : getParentFolder(ss.getId());
+    const parentFolder = getParentFolder(ss.getId());
     parentFolder.createFile(exportBlob);
 
     // エクスポート済み行にマーカーを書き戻し。
@@ -93,6 +79,15 @@ function exportUnexportedRowsToXlsx() {
     // 一時シートを削除（失敗時もクリーンアップ）。
     if (tempFileId) DriveApp.getFileById(tempFileId).setTrashed(true);
   }
+}
+
+function onOpen() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  ensureSettingsSheet_(ss);
+  SpreadsheetApp.getUi()
+    .createMenu('エクスポート')
+    .addItem('Excelに出力', 'exportUnexportedRowsToXlsx')
+    .addToUi();
 }
 
 function removeExportColumn(row, exportColIdx) {
@@ -115,16 +110,36 @@ function getParentFolder(fileId) {
   const parents = DriveApp.getFileById(fileId).getParents();
   return parents.hasNext() ? parents.next() : DriveApp.getRootFolder();
 }
+const SETTINGS_SHEET_NAME = '設定';
+const SETTINGS_DEFAULTS = {
+  sheetName: 'test',
+  exportColumn: 12,
+  outputBaseName: 'test',
+};
 
-function getRequiredConfig(key) {
-  const value = CONFIG[key];
-  if (!value) throw new Error(`${key} is required in CONFIG.`);
-  return value;
+function getSettings_(ss) {
+  const sheet = ensureSettingsSheet_(ss);
+  const values = sheet.getRange(2, 2, 3, 1).getValues().flat();
+  const sheetName = values[0] || SETTINGS_DEFAULTS.sheetName;
+  const exportColumn = Number(values[1]) || SETTINGS_DEFAULTS.exportColumn;
+  const outputBaseName = values[2] || SETTINGS_DEFAULTS.outputBaseName;
+  return { sheetName, exportColumn, outputBaseName };
 }
 
-function getConfigOrDefault(key, defaultValue) {
-  const value = CONFIG[key];
-  return value === null || value === '' || typeof value === 'undefined' ? defaultValue : value;
+function ensureSettingsSheet_(ss) {
+  let sheet = ss.getSheetByName(SETTINGS_SHEET_NAME);
+  if (sheet) return sheet;
+
+  sheet = ss.insertSheet(SETTINGS_SHEET_NAME);
+  sheet.getRange('A1:B1').setValues([['設定項目', '値']]);
+  sheet.getRange('A2:B4').setValues([
+    ['対象シート名', SETTINGS_DEFAULTS.sheetName],
+    ['エクスポート列番号', SETTINGS_DEFAULTS.exportColumn],
+    ['出力ファイル名ベース', SETTINGS_DEFAULTS.outputBaseName],
+  ]);
+  sheet.setFrozenRows(1);
+  sheet.autoResizeColumns(1, 2);
+  return sheet;
 }
 
 /**

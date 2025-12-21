@@ -9,4 +9,3 @@ pic/
 **/*.pdf
 **/*.xlsx
 .env*
-config.gs
