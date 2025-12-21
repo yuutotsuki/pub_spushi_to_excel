@@ -1,0 +1,9 @@
+pic/**
+**/*.png
+**/*.jpg
+**/*.jpeg
+**/*.gif
+**/*.pdf
+**/*.xlsx
+config.gs
+config.sample.gs

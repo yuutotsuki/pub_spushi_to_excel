@@ -1,0 +1,12 @@
+backup/
+node_modules/
+.clasp.json
+pic/
+**/*.png
+**/*.jpg
+**/*.jpeg
+**/*.gif
+**/*.pdf
+**/*.xlsx
+.env*
+config.gs
