@@ -68,7 +68,9 @@ function exportUnexportedRowsToXlsx() {
     // .xlsx としてエクスポート（Drive API v3 を直接叩いて alt=media を指定）。
     const exportBlob = fetchExportAsXlsx(tempFileId).setName(fileName);
 
-    const parentFolder = getParentFolder(ss.getId());
+    const parentFolder = settings.outputFolderId
+      ? DriveApp.getFolderById(settings.outputFolderId)
+      : getParentFolder(ss.getId());
     parentFolder.createFile(exportBlob);
 
     // エクスポート済み行にマーカーを書き戻し。
@@ -115,15 +117,17 @@ const SETTINGS_DEFAULTS = {
   sheetName: 'test',
   exportColumn: 12,
   outputBaseName: 'test',
+  outputFolderId: '',
 };
 
 function getSettings_(ss) {
   const sheet = ensureSettingsSheet_(ss);
-  const values = sheet.getRange(2, 2, 3, 1).getValues().flat();
+  const values = sheet.getRange(2, 2, 4, 1).getValues().flat();
   const sheetName = values[0] || SETTINGS_DEFAULTS.sheetName;
   const exportColumn = Number(values[1]) || SETTINGS_DEFAULTS.exportColumn;
   const outputBaseName = values[2] || SETTINGS_DEFAULTS.outputBaseName;
-  return { sheetName, exportColumn, outputBaseName };
+  const outputFolderId = values[3] || SETTINGS_DEFAULTS.outputFolderId;
+  return { sheetName, exportColumn, outputBaseName, outputFolderId };
 }
 
 function ensureSettingsSheet_(ss) {
@@ -132,10 +136,11 @@ function ensureSettingsSheet_(ss) {
 
   sheet = ss.insertSheet(SETTINGS_SHEET_NAME);
   sheet.getRange('A1:B1').setValues([['設定項目', '値']]);
-  sheet.getRange('A2:B4').setValues([
+  sheet.getRange('A2:B5').setValues([
     ['対象シート名', SETTINGS_DEFAULTS.sheetName],
     ['エクスポート列番号', SETTINGS_DEFAULTS.exportColumn],
     ['出力ファイル名ベース', SETTINGS_DEFAULTS.outputBaseName],
+    ['出力先フォルダID（空なら同じフォルダ）', SETTINGS_DEFAULTS.outputFolderId],
   ]);
   sheet.setFrozenRows(1);
   sheet.autoResizeColumns(1, 2);
