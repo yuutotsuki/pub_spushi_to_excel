@@ -26,17 +26,26 @@ function exportUnexportedRowsToXlsx() {
   const values = sheet.getRange(1, 1, lastRow, lastCol).getValues();
   const header = values[0];
   const exportColIdx = Number(settings.exportColumn) - 1;
+  const markerColIdx = resolveMarkerColumnIndex_(header, exportColIdx);
+  const exportLabelIndices = getExportLabelIndices_(header);
+  if (exportLabelIndices.length > 1) {
+    throw new Error('「エクスポート」ヘッダが複数あります。1つだけにしてください。');
+  }
+  if (exportLabelIndices.length === 1 && exportLabelIndices[0] !== markerColIdx) {
+    throw new Error('設定のエクスポート列番号と、シートの「エクスポート」列が一致していません。');
+  }
+  const exportRemoveIdx = markerColIdx;
 
   const rowsToExport = [];
   const rowsToMark = [];
   for (let i = 1; i < values.length; i++) {
     const row = values[i];
     // データの無い行はスキップ（全列空 or エクスポート列以外が空）
-    if (isEmptyRow(row, exportColIdx)) continue;
+    if (isEmptyRow(row, markerColIdx)) continue;
 
-    const marker = row[exportColIdx];
+    const marker = row[markerColIdx];
     if (marker === '' || marker === null) {
-      rowsToExport.push(removeExportColumn(row, exportColIdx));
+      rowsToExport.push(removeExportColumn(row, exportRemoveIdx));
       rowsToMark.push(i + 1); // シート上の行番号（ヘッダー込み）
     }
   }
@@ -47,7 +56,7 @@ function exportUnexportedRowsToXlsx() {
   }
 
   const output = [
-    removeExportColumn(header, exportColIdx),
+    removeExportColumn(header, exportRemoveIdx),
     ...rowsToExport,
   ];
 
@@ -69,12 +78,13 @@ function exportUnexportedRowsToXlsx() {
     const exportBlob = fetchExportAsXlsx(tempFileId).setName(fileName);
 
     const parentFolder = settings.outputFolderId
-      ? DriveApp.getFolderById(settings.outputFolderId)
+      ? getFolderOrThrow_(settings.outputFolderId)
       : getParentFolder(ss.getId());
     parentFolder.createFile(exportBlob);
 
     // エクスポート済み行にマーカーを書き戻し。
-    sheet.getRangeList(rowsToMark.map((row) => `L${row}`)).setValue(config.exportMarker);
+    const markerColumn = columnToLetter_(markerColIdx + 1);
+    sheet.getRangeList(rowsToMark.map((row) => `${markerColumn}${row}`)).setValue(config.exportMarker);
 
     Logger.log(`Exported ${rowsToMark.length} rows -> ${exportBlob.getName()}`);
   } finally {
@@ -119,14 +129,31 @@ const SETTINGS_DEFAULTS = {
   outputBaseName: 'test',
   outputFolderId: '',
 };
+const SETTINGS_LABELS = {
+  sheetName: '対象シート名',
+  exportColumn: 'エクスポート列番号',
+  outputBaseName: '出力ファイル名ベース',
+  outputFolderId: '出力先フォルダID（空なら同じフォルダ）',
+};
 
 function getSettings_(ss) {
   const sheet = ensureSettingsSheet_(ss);
-  const values = sheet.getRange(2, 2, 4, 1).getValues().flat();
-  const sheetName = values[0] || SETTINGS_DEFAULTS.sheetName;
-  const exportColumn = Number(values[1]) || SETTINGS_DEFAULTS.exportColumn;
-  const outputBaseName = values[2] || SETTINGS_DEFAULTS.outputBaseName;
-  const outputFolderId = values[3] || SETTINGS_DEFAULTS.outputFolderId;
+  const lastRow = Math.max(2, sheet.getLastRow());
+  const rows = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+  const map = {};
+  rows.forEach(([label, value]) => {
+    if (!label) return;
+    map[normalizeLabel_(label)] = value;
+  });
+
+  const sheetName = map[normalizeLabel_(SETTINGS_LABELS.sheetName)] || SETTINGS_DEFAULTS.sheetName;
+  const exportColumn = parseColumnNumber_(map[normalizeLabel_(SETTINGS_LABELS.exportColumn)]) ||
+    SETTINGS_DEFAULTS.exportColumn;
+  const outputBaseName = map[normalizeLabel_(SETTINGS_LABELS.outputBaseName)] || SETTINGS_DEFAULTS.outputBaseName;
+  const rawFolder =
+    map[normalizeLabel_(SETTINGS_LABELS.outputFolderId)] ||
+    map[normalizeLabel_('出力先フォルダID')];
+  const outputFolderId = normalizeFolderId_(rawFolder) || SETTINGS_DEFAULTS.outputFolderId;
   return { sheetName, exportColumn, outputBaseName, outputFolderId };
 }
 
@@ -137,14 +164,80 @@ function ensureSettingsSheet_(ss) {
   sheet = ss.insertSheet(SETTINGS_SHEET_NAME);
   sheet.getRange('A1:B1').setValues([['設定項目', '値']]);
   sheet.getRange('A2:B5').setValues([
-    ['対象シート名', SETTINGS_DEFAULTS.sheetName],
-    ['エクスポート列番号', SETTINGS_DEFAULTS.exportColumn],
-    ['出力ファイル名ベース', SETTINGS_DEFAULTS.outputBaseName],
-    ['出力先フォルダID（空なら同じフォルダ）', SETTINGS_DEFAULTS.outputFolderId],
+    [SETTINGS_LABELS.sheetName, SETTINGS_DEFAULTS.sheetName],
+    [SETTINGS_LABELS.exportColumn, SETTINGS_DEFAULTS.exportColumn],
+    [SETTINGS_LABELS.outputBaseName, SETTINGS_DEFAULTS.outputBaseName],
+    [SETTINGS_LABELS.outputFolderId, SETTINGS_DEFAULTS.outputFolderId],
   ]);
   sheet.setFrozenRows(1);
   sheet.autoResizeColumns(1, 2);
   return sheet;
+}
+
+function normalizeFolderId_(value) {
+  if (value === null || typeof value === 'undefined') return '';
+  const text = String(value).trim();
+  if (!text) return '';
+  const match = text.match(/folders\/([a-zA-Z0-9_-]+)/);
+  if (match) return match[1];
+  return text;
+}
+
+function parseColumnNumber_(value) {
+  if (value === null || typeof value === 'undefined') return NaN;
+  const text = String(value).trim();
+  if (!text) return NaN;
+  const digits = text.replace(/[^\d]/g, '');
+  const num = parseInt(digits, 10);
+  return Number.isFinite(num) && num > 0 ? num : NaN;
+}
+
+function columnToLetter_(col) {
+  let n = col;
+  let letters = '';
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    letters = String.fromCharCode(65 + rem) + letters;
+    n = Math.floor((n - 1) / 26);
+  }
+  return letters;
+}
+
+function normalizeLabel_(value) {
+  return String(value)
+    .trim()
+    .replace(/\s+/g, '')
+    .replace(/（.*?）/g, '');
+}
+
+function resolveMarkerColumnIndex_(headerRow, exportColIdx) {
+  const lastIdx = headerRow.length - 1;
+  const idxInRange = Number.isInteger(exportColIdx) && exportColIdx >= 0 && exportColIdx <= lastIdx;
+  if (idxInRange) return exportColIdx;
+
+  const normalizedHeaders = headerRow.map((v) => normalizeLabel_(v || ''));
+  const labelIdx = normalizedHeaders.indexOf('エクスポート');
+  if (labelIdx !== -1) return labelIdx;
+
+  throw new Error('Invalid export column. Check "エクスポート列番号" in 設定シート.');
+}
+
+function getExportLabelIndices_(headerRow) {
+  const normalizedHeaders = headerRow.map((v) => normalizeLabel_(v || ''));
+  const indices = [];
+  for (let i = 0; i < normalizedHeaders.length; i++) {
+    if (normalizedHeaders[i] === 'エクスポート') indices.push(i);
+  }
+  return indices;
+}
+
+
+function getFolderOrThrow_(folderId) {
+  try {
+    return DriveApp.getFolderById(folderId);
+  } catch (err) {
+    throw new Error(`Invalid OUTPUT_FOLDER_ID: ${folderId}`);
+  }
 }
 
 /**
